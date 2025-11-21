@@ -210,8 +210,8 @@ async def run_infilling(
         answer_match = re.search(r'The best answer is ([A-D])', full_text)
         final_answer = answer_match.group(1) if answer_match else ""
 
-        # Count actual tokens - use the model's thinking_tokens list for accurate count
-        actual_tokens = len(particle.model.thinking_tokens)
+        # Count actual tokens - particle is the model instance itself
+        actual_tokens = len(particle.thinking_tokens)
 
         result = InfillingResult(
             question=question,
