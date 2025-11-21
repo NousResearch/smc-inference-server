@@ -15,6 +15,7 @@ This is particularly useful for:
 import asyncio
 import json
 import re
+import sys
 from typing import List, Dict, Optional
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -28,8 +29,8 @@ BLUE = "\033[94m"
 END = "\033[0m"
 
 # Configuration
-NUM_PARTICLES = 5
-BEAM_FACTOR = 2
+NUM_PARTICLES = 3  # Reduced from 5 for speed
+BEAM_FACTOR = 1    # Reduced from 2 for speed (less resampling)
 TEMPERATURE = 1.0
 
 
@@ -105,10 +106,7 @@ class ThinkingInfillingModel(Model):
     """
     SMC model for infilling thinking traces.
 
-    This model:
-    1. Replaces [BLANK] tokens with actual reasoning
-    2. Enforces a specific token budget for thinking
-    3. The prompt already contains the correct answer at the end
+    Uses 1 generated token per [BLANK] token for fast, controlled generation.
     """
 
     def __init__(
@@ -120,97 +118,47 @@ class ThinkingInfillingModel(Model):
     ):
         super().__init__()
         self.lm = lm
-        self.context = LMContext(lm, prompt, temperature)
-        self.token_budget = token_budget
-        self.generated_tokens = []
+        self.temperature = temperature
+
+        # Split prompt on [BLANK] - each blank gets 1 generated token
+        self.parts = prompt.split("[BLANK]")
+
+        # Initialize context with first part
+        self.context = LMContext(lm, self.parts[0], temperature)
 
         # Track state
+        self.current_part_idx = 1
         self.thinking_tokens = []
-        self.num_blanks_filled = 0
-
-        # Parse the prompt to find where blanks start
-        self._find_blank_positions()
-
-        # Get special tokens
-        self.eos_token = self.lm.tokenizer.eos_token_id
-        self.blank_token_ids = set(self.lm.tokenizer.encode("[BLANK]", add_special_tokens=False))
-
-        # Tokens that typically end sentences
-        self.sentence_end_tokens = self._get_sentence_end_tokens()
-
-    def _find_blank_positions(self):
-        """Find where [BLANK] tokens are in the context"""
-        prompt_text = str(self.context)
-        think_start = prompt_text.find("<think>")
-        think_end = prompt_text.find("</think>")
-
-        if think_start != -1 and think_end != -1:
-            thinking_section = prompt_text[think_start + 7:think_end]
-            self.num_blanks = thinking_section.count("[BLANK]")
-        else:
-            self.num_blanks = 0
-
-    def _get_sentence_end_tokens(self) -> set:
-        """Get token IDs that typically end sentences"""
-        end_tokens = set()
-        for token_text in [".", "!", "?"]:
-            token_ids = self.lm.tokenizer.encode(token_text, add_special_tokens=False)
-            for tid in token_ids:
-                # Check if token ends with punctuation
-                decoded = self.lm.tokenizer.decode([tid])
-                if decoded.rstrip().endswith(token_text):
-                    end_tokens.add(tid)
-        return end_tokens
 
     async def step(self):
-        """Single step of generation with infilling constraints"""
+        """Generate 1 token per blank, then observe the next part"""
 
-        # Get the next token distribution
+        if self.current_part_idx >= len(self.parts):
+            self.finish()
+            return
+
+        # Generate 1 token for this blank
         next_dist = self.context.next_token()
-
-        # Sample the next token
         token = await self.sample(next_dist)
+        self.thinking_tokens.append(token)
 
-        # If it's a [BLANK] token, replace it with generated content
-        if token.token_id in self.blank_token_ids:
-            self.num_blanks_filled += 1
+        # Observe the next part after the blank
+        part = self.parts[self.current_part_idx]
+        part_tokens = self.lm.tokenizer.encode(part, add_special_tokens=False)
 
-            # Don't allow generating [BLANK] tokens
-            await self.observe(self.context.mask_dist(self.blank_token_ids), False)
+        for token_id in part_tokens:
+            t = Token(self.lm, token_id, self.lm.tokenizer.decode([token_id]))
+            await self.observe(self.context.next_token(), t)
 
-            # If we're near the end of blanks, prefer sentence-ending tokens
-            if self.num_blanks_filled >= self.num_blanks - 1:
-                await self.observe(
-                    self.context.mask_dist(self.sentence_end_tokens),
-                    True
-                )
-
-            replacement_token = await self.sample(next_dist)
-            self.thinking_tokens.append(replacement_token)
-            self.generated_tokens.append(replacement_token)
-        else:
-            # Not a blank, just continue (handles </think>, answer, etc.)
-            self.generated_tokens.append(token)
-
-            # Stop if we hit EOS or have generated the full prompt
-            if token.token_id == self.eos_token:
-                self.finish()
+        self.current_part_idx += 1
 
     def get_thinking_trace(self) -> str:
         """Extract just the thinking trace"""
-        full_text = self.lm.tokenizer.decode([t.token_id for t in self.generated_tokens])
-        match = re.search(r'<think>(.*?)</think>', full_text, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-        return ""
+        return self.lm.tokenizer.decode([t.token_id for t in self.thinking_tokens])
 
-    def get_answer(self) -> str:
-        """Extract the final answer"""
-        full_text = self.lm.tokenizer.decode([t.token_id for t in self.generated_tokens])
-        match = re.search(r'The best answer is ([A-D])', full_text)
-        if match:
-            return match.group(1)
-        return ""
+    def get_full_output(self) -> str:
+        """Get the full generated output"""
+        return str(self.context)
 
 
 async def run_infilling(
@@ -233,6 +181,7 @@ async def run_infilling(
     print(f"{GREEN}Question:{END} {question}")
     print(f"{GREEN}Correct Answer:{END} {correct_answer}")
     print(f"{GREEN}Token Budget:{END} {token_budget}")
+    print(f"{YELLOW}Running SMC with {num_particles} particles...{END}")
     print(f"{BLUE}{'='*80}{END}\n")
 
     model = ThinkingInfillingModel(
@@ -242,7 +191,11 @@ async def run_infilling(
         temperature=TEMPERATURE
     )
 
+    import time
+    start = time.time()
     particles = await smc_steer(model, num_particles, beam_factor)
+    elapsed = time.time() - start
+    print(f"\n{GREEN}✓ SMC completed in {elapsed:.1f}s{END}")
 
     results = []
     for i, particle in enumerate(particles):
