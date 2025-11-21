@@ -179,7 +179,7 @@ async def run_infilling(
 
     print(f"\n{BLUE}{'='*80}{END}")
     print(f"{GREEN}Question:{END} {question}")
-    print(f"{GREEN}Correct Answer:{END} {correct_answer}")
+    print(f"{GREEN}Correct Answer:{END} {correct_answer} - {choices[correct_answer]}")
     print(f"{GREEN}Token Budget:{END} {token_budget}")
     print(f"{YELLOW}Running SMC with {num_particles} particles...{END}")
     print(f"{BLUE}{'='*80}{END}\n")
