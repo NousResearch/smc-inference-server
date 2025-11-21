@@ -65,17 +65,19 @@ async def test_prompt_creation():
     prompt = create_infilling_prompt(
         question["question"],
         question["choices"],
-        token_budget
+        token_budget,
+        question["correct_answer"]
     )
 
     print("Generated prompt:")
-    print(f"{YELLOW}{prompt[:500]}...{END}\n")
+    print(f"{YELLOW}{prompt}{END}\n")
 
     # Check that prompt has correct structure
     assert "<think>" in prompt, "Prompt missing <think> tag"
     assert "</think>" in prompt, "Prompt missing </think> tag"
     assert "[BLANK]" in prompt, "Prompt missing [BLANK] tokens"
     assert "The best answer is" in prompt, "Prompt missing answer preamble"
+    assert question["correct_answer"] in prompt, "Prompt missing correct answer"
 
     # Count [BLANK] tokens
     blank_count = prompt.count("[BLANK]")
@@ -90,16 +92,11 @@ async def test_prompt_creation():
     return blank_count == token_budget
 
 
-async def test_infilling_single():
+async def test_infilling_single(lm):
     """Test infilling on a single question"""
     print(f"\n{BLUE}{'='*80}{END}")
     print(f"{GREEN}Test 2: Single Question Infilling{END}")
     print(f"{BLUE}{'='*80}{END}\n")
-
-    # Use a small model for faster testing
-    print(f"{YELLOW}Loading model...{END}")
-    lm = CachedCausalLM.from_pretrained("NousResearch/Hermes-3-Llama-3.2-3B")
-    lm.batch_size = 8
 
     question = TEST_QUESTIONS[0]
     token_budget = 30  # Small budget for quick testing
@@ -140,15 +137,11 @@ async def test_infilling_single():
     return all_have_answers
 
 
-async def test_multiple_budgets():
+async def test_multiple_budgets(lm):
     """Test infilling with multiple token budgets"""
     print(f"\n{BLUE}{'='*80}{END}")
     print(f"{GREEN}Test 3: Multiple Token Budgets{END}")
     print(f"{BLUE}{'='*80}{END}\n")
-
-    print(f"{YELLOW}Loading model...{END}")
-    lm = CachedCausalLM.from_pretrained("NousResearch/Hermes-3-Llama-3.2-3B")
-    lm.batch_size = 8
 
     question = TEST_QUESTIONS[1]  # Simple arithmetic question
     budgets = [20, 40]  # Small budgets for quick testing
@@ -182,15 +175,11 @@ async def test_multiple_budgets():
     return True
 
 
-async def test_data_export():
+async def test_data_export(lm):
     """Test that results can be exported for fine-tuning"""
     print(f"\n{BLUE}{'='*80}{END}")
     print(f"{GREEN}Test 4: Data Export{END}")
     print(f"{BLUE}{'='*80}{END}\n")
-
-    print(f"{YELLOW}Loading model...{END}")
-    lm = CachedCausalLM.from_pretrained("NousResearch/Hermes-3-Llama-3.2-3B")
-    lm.batch_size = 8
 
     question = TEST_QUESTIONS[2]
     results = await run_infilling(
@@ -243,23 +232,29 @@ async def run_all_tests():
         print(f"{RED}✗ Test 1 failed: {e}{END}")
         results['prompt_creation'] = False
 
+    # Load model once for all remaining tests
+    print(f"\n{YELLOW}Loading model for tests 2-4...{END}")
+    lm = CachedCausalLM.from_pretrained("NousResearch/Hermes-3-Llama-3.2-3B")
+    lm.batch_size = 8
+    print(f"{GREEN}Model loaded!{END}")
+
     # Test 2: Single infilling
     try:
-        results['single_infilling'] = await test_infilling_single()
+        results['single_infilling'] = await test_infilling_single(lm)
     except Exception as e:
         print(f"{RED}✗ Test 2 failed: {e}{END}")
         results['single_infilling'] = False
 
     # Test 3: Multiple budgets
     try:
-        results['multiple_budgets'] = await test_multiple_budgets()
+        results['multiple_budgets'] = await test_multiple_budgets(lm)
     except Exception as e:
         print(f"{RED}✗ Test 3 failed: {e}{END}")
         results['multiple_budgets'] = False
 
     # Test 4: Data export
     try:
-        results['data_export'] = await test_data_export()
+        results['data_export'] = await test_data_export(lm)
     except Exception as e:
         print(f"{RED}✗ Test 4 failed: {e}{END}")
         results['data_export'] = False

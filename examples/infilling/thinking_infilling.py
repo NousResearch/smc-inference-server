@@ -69,7 +69,7 @@ def pretty_format(particle, token_budget: int):
     return f"{highlighted}\n{BLUE}Weight: {particle.weight:.4f}{END}\n"
 
 
-def create_infilling_prompt(question: str, choices: Dict[str, str], token_budget: int) -> str:
+def create_infilling_prompt(question: str, choices: Dict[str, str], token_budget: int, correct_answer: str) -> str:
     """
     Creates a prompt with [BLANK] tokens for infilling.
 
@@ -77,6 +77,7 @@ def create_infilling_prompt(question: str, choices: Dict[str, str], token_budget
         question: The question to answer
         choices: Dict mapping choice letters (A, B, C, D) to choice text
         token_budget: Number of tokens allocated for thinking
+        correct_answer: The correct answer (A, B, C, or D) - included in prompt
 
     Returns:
         Formatted prompt with blanks
@@ -95,7 +96,7 @@ def create_infilling_prompt(question: str, choices: Dict[str, str], token_budget
 {blanks}
 </think>
 
-The best answer is"""
+The best answer is {correct_answer}"""
 
     return prompt
 
@@ -107,8 +108,7 @@ class ThinkingInfillingModel(Model):
     This model:
     1. Replaces [BLANK] tokens with actual reasoning
     2. Enforces a specific token budget for thinking
-    3. Ensures the trace ends properly with </think> and an answer
-    4. Can optionally constrain to produce a specific correct answer
+    3. The prompt already contains the correct answer at the end
     """
 
     def __init__(
@@ -116,20 +116,17 @@ class ThinkingInfillingModel(Model):
         lm: CachedCausalLM,
         prompt: str,
         token_budget: int,
-        correct_answer: Optional[str] = None,
         temperature: float = 1.0
     ):
         super().__init__()
         self.lm = lm
         self.context = LMContext(lm, prompt, temperature)
         self.token_budget = token_budget
-        self.correct_answer = correct_answer
         self.generated_tokens = []
 
         # Track state
-        self.in_thinking = False
-        self.thinking_complete = False
         self.thinking_tokens = []
+        self.num_blanks_filled = 0
 
         # Parse the prompt to find where blanks start
         self._find_blank_positions()
@@ -137,7 +134,6 @@ class ThinkingInfillingModel(Model):
         # Get special tokens
         self.eos_token = self.lm.tokenizer.eos_token_id
         self.blank_token_ids = set(self.lm.tokenizer.encode("[BLANK]", add_special_tokens=False))
-        self.think_close_ids = self.lm.tokenizer.encode("</think>", add_special_tokens=False)
 
         # Tokens that typically end sentences
         self.sentence_end_tokens = self._get_sentence_end_tokens()
@@ -149,9 +145,10 @@ class ThinkingInfillingModel(Model):
         think_end = prompt_text.find("</think>")
 
         if think_start != -1 and think_end != -1:
-            self.in_thinking = True
             thinking_section = prompt_text[think_start + 7:think_end]
             self.num_blanks = thinking_section.count("[BLANK]")
+        else:
+            self.num_blanks = 0
 
     def _get_sentence_end_tokens(self) -> set:
         """Get token IDs that typically end sentences"""
@@ -168,105 +165,36 @@ class ThinkingInfillingModel(Model):
     async def step(self):
         """Single step of generation with infilling constraints"""
 
-        # Check if we've hit generation limits
-        if len(self.generated_tokens) > self.token_budget + 100:
-            self.finish()
-            return
+        # Get the next token distribution
+        next_dist = self.context.next_token()
 
-        # Handle [BLANK] token replacement during thinking
-        if self.in_thinking and not self.thinking_complete:
-            # Check if we're at a [BLANK] token
-            next_dist = self.context.next_token()
+        # Sample the next token
+        token = await self.sample(next_dist)
 
-            # Get the next token from the original prompt
-            peek_token = await self.sample(next_dist)
+        # If it's a [BLANK] token, replace it with generated content
+        if token.token_id in self.blank_token_ids:
+            self.num_blanks_filled += 1
 
-            # If it's a [BLANK] token, replace it with generated content
-            if peek_token.token_id in self.blank_token_ids:
-                # Generate replacement token
-                replacement_dist = self.context.next_token()
+            # Don't allow generating [BLANK] tokens
+            await self.observe(self.context.mask_dist(self.blank_token_ids), False)
 
-                # Don't allow generating more [BLANK] tokens or </think> yet
-                forbidden_tokens = self.blank_token_ids | set(self.think_close_ids)
-                await self.observe(self.context.mask_dist(forbidden_tokens), False)
+            # If we're near the end of blanks, prefer sentence-ending tokens
+            if self.num_blanks_filled >= self.num_blanks - 1:
+                await self.observe(
+                    self.context.mask_dist(self.sentence_end_tokens),
+                    True
+                )
 
-                # If we're near the end of token budget, prefer sentence-ending tokens
-                if len(self.thinking_tokens) >= self.token_budget - 2:
-                    await self.observe(
-                        self.context.mask_dist(self.sentence_end_tokens),
-                        True
-                    )
-
-                replacement_token = await self.sample(replacement_dist)
-                self.thinking_tokens.append(replacement_token)
-                self.generated_tokens.append(replacement_token)
-
-                # Check if we've filled the budget
-                if len(self.thinking_tokens) >= self.token_budget:
-                    self.thinking_complete = True
-                    self.in_thinking = False
-
-                    # Force generation of </think>
-                    for token_id in self.think_close_ids:
-                        close_token = Token(self.lm, token_id, self.lm.tokenizer.decode([token_id]))
-                        await self.observe(self.context.next_token(), close_token)
-                        self.generated_tokens.append(close_token)
-
-                    # Force generation of newline and "The best answer is"
-                    answer_preamble = "\nThe best answer is"
-                    for token_id in self.lm.tokenizer.encode(answer_preamble, add_special_tokens=False):
-                        ans_token = Token(self.lm, token_id, self.lm.tokenizer.decode([token_id]))
-                        await self.observe(self.context.next_token(), ans_token)
-                        self.generated_tokens.append(ans_token)
-
-                return
-            else:
-                # Not a blank token, continue normal generation
-                self.generated_tokens.append(peek_token)
-
-                # Check if we hit </think> naturally
-                if peek_token.token_id in self.think_close_ids:
-                    self.thinking_complete = True
-                    self.in_thinking = False
-
-                return
-
-        # After thinking, generate the answer
-        if self.thinking_complete:
-            next_dist = self.context.next_token()
-
-            # If we have a correct answer constraint, enforce it
-            if self.correct_answer is not None and len(self.generated_tokens) - len(self.thinking_tokens) < 5:
-                # Try to steer toward the correct answer
-                answer_tokens = self.lm.tokenizer.encode(f" {self.correct_answer}", add_special_tokens=False)
-                if len(self.generated_tokens) - len(self.thinking_tokens) - len(self.think_close_ids) < len(answer_tokens):
-                    expected_token_idx = len(self.generated_tokens) - len(self.thinking_tokens) - len(self.think_close_ids)
-                    if expected_token_idx < len(answer_tokens):
-                        expected_token_id = answer_tokens[expected_token_idx]
-                        expected_token = Token(
-                            self.lm,
-                            expected_token_id,
-                            self.lm.tokenizer.decode([expected_token_id])
-                        )
-                        await self.observe(next_dist, expected_token)
-                        self.generated_tokens.append(expected_token)
-                        return
-
-            token = await self.sample(next_dist)
+            replacement_token = await self.sample(next_dist)
+            self.thinking_tokens.append(replacement_token)
+            self.generated_tokens.append(replacement_token)
+        else:
+            # Not a blank, just continue (handles </think>, answer, etc.)
             self.generated_tokens.append(token)
 
+            # Stop if we hit EOS or have generated the full prompt
             if token.token_id == self.eos_token:
                 self.finish()
-
-            return
-
-        # Normal generation (shouldn't typically reach here)
-        next_dist = self.context.next_token()
-        token = await self.sample(next_dist)
-        self.generated_tokens.append(token)
-
-        if token.token_id == self.eos_token:
-            self.finish()
 
     def get_thinking_trace(self) -> str:
         """Extract just the thinking trace"""
@@ -299,7 +227,7 @@ async def run_infilling(
 
     Returns a list of InfillingResult objects, one per particle.
     """
-    prompt = create_infilling_prompt(question, choices, token_budget)
+    prompt = create_infilling_prompt(question, choices, token_budget, correct_answer)
 
     print(f"\n{BLUE}{'='*80}{END}")
     print(f"{GREEN}Question:{END} {question}")
@@ -311,7 +239,6 @@ async def run_infilling(
         lm=lm,
         prompt=prompt,
         token_budget=token_budget,
-        correct_answer=correct_answer,
         temperature=TEMPERATURE
     )
 
