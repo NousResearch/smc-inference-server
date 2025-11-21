@@ -86,8 +86,8 @@ def create_infilling_prompt(question: str, choices: Dict[str, str], token_budget
     # Format choices
     choices_text = "\n".join([f"{k}. {v}" for k, v in choices.items()])
 
-    # Create the blank tokens
-    blanks = " ".join(["[BLANK]"] * token_budget)
+    # Create the blank tokens - no spaces between them to avoid double spaces
+    blanks = "[BLANK]" * token_budget
 
     prompt = f"""Question: {question}
 
@@ -210,9 +210,8 @@ async def run_infilling(
         answer_match = re.search(r'The best answer is ([A-D])', full_text)
         final_answer = answer_match.group(1) if answer_match else ""
 
-        # Count actual tokens in thinking trace
-        thinking_tokens = lm.tokenizer.encode(thinking_trace, add_special_tokens=False)
-        actual_tokens = len(thinking_tokens)
+        # Count actual tokens - use the model's thinking_tokens list for accurate count
+        actual_tokens = len(particle.model.thinking_tokens)
 
         result = InfillingResult(
             question=question,
