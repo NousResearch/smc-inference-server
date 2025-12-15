@@ -116,4 +116,4 @@ Run the server + load balancer, and in another terminal, run `python simple_eval
 
 ## 🛠️ Future Work
 
-Development on this project will continue as we explore new constraint designs and optimizations to the framework here. It is both useful for experimenting and for benchmarking at a larger scale, expecially on compute clusters with >4 GPUs. 8xH100 was able to finish the entire 15,000 question MMLU set in under 4 hours using this. More updates to come soon!
+Development on this project will continue as we explore new constraint designs and optimizations to the framework here. It is both useful for experimenting and for benchmarking at a larger scale, especially on compute clusters with >4 GPUs. 8xH100 was able to finish the entire 15,000 question MMLU set in under 4 hours using this. More updates to come soon!
