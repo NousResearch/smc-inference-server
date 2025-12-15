@@ -4,7 +4,8 @@ import asyncio
 import aiohttp
 
 class LLaMPPLInferenceModel(LM):
-    """LLaMPPLInferenceModel is a custom inference adapter model for use with lm-evaluation-harness"""
+    """Inference adapter for lm-evaluation-harness."""
+
     def __init__(
         self, 
         server_url="http://localhost:8000",
@@ -34,7 +35,6 @@ class LLaMPPLInferenceModel(LM):
             print("Make sure the inference server is running")
         
     async def _generate_async(self, request_data, session):
-        """Helper function to make an async request"""
         async with session.post(f"{self.server_url}/generate", json=request_data, timeout=aiohttp.ClientTimeout(total=600)) as response:
             if response.status == 200:
                 result = await response.json()
@@ -44,7 +44,6 @@ class LLaMPPLInferenceModel(LM):
                 raise Exception(f"Error from server: {error_text}")
 
     def generate_until(self, reqs):
-        """Top level method used for generation tasks"""
         async def process_all_requests():
             timeout = aiohttp.ClientTimeout(total=2400)
             connector = aiohttp.TCPConnector(limit=8, force_close=False)
@@ -57,9 +56,9 @@ class LLaMPPLInferenceModel(LM):
                 all_tasks = []
                 for request in reqs:
                     input_text, gen_params = request.args
-                    
+
                     request_data = {
-                        "prompt": input_text, # For reasoning models, we use input_text[:-19] + "<think>" to prompt thinking
+                        "prompt": input_text,
                         "num_tokens": self.num_tokens,
                         "num_particles": self.num_particles,
                         "beam_factor": self.beam_factor,
@@ -83,8 +82,6 @@ class LLaMPPLInferenceModel(LM):
         
         return results
 
-    ### API INTERFACE METHODS FOR LM_EVAL MODEL ###
-
     def generate(self, context, max_length, stop=None, temperature=1.0):
         request = {
             "prompt": context,
@@ -107,7 +104,6 @@ class LLaMPPLInferenceModel(LM):
             raise Exception(f"Error from server: {response.text}")
 
     def loglikelihood(self, reqs):
-        """Basic logprob evaluation method, needed for lm_eval model interface"""
         batches = [reqs[i:i + self.batch_size] for i in range(0, len(reqs), self.batch_size)]
         results = []
         
@@ -136,7 +132,6 @@ class LLaMPPLInferenceModel(LM):
         return results
 
     def loglikelihood_rolling(self, reqs):
-        """Rolling logprob evaluation method, needed for lm_eval model interface"""
         batches = [reqs[i:i + self.batch_size] for i in range(0, len(reqs), self.batch_size)]
         results = []
         

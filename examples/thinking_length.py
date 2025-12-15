@@ -1,4 +1,4 @@
-from hfppl import Model, CachedCausalLM, LMContext, smc_steer
+from llamppl import Model, CachedCausalLM, LMContext, smc_steer
 from typing import List
 import asyncio
 
@@ -12,7 +12,7 @@ BEAM_FACTOR = 1
 THINKING_TOKENS = 20
 ITERATIONS = 1
 
-PROMPT = "What is 2+2?"
+PROMPT = "What is 2+2? <think>"
 
 def pretty_format(particle):
     """This method formats particle contexts for display"""

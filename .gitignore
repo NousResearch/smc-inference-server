@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment variables
+.env
+.env.local
+
+# Model caches
+.cache/
+*.ckpt
+*.pth
+*.bin
+*.safetensors
+
+# Results and outputs
+results/
+outputs/
+logs/
+*.log
+
+# Project-specific
+smcpics/
+run_data.json
+mmlu_results/
+finetuning_data/
+infilling_results_*.json
+
+# Docker
+.dockerignore
+
+# OS
+Thumbs.db

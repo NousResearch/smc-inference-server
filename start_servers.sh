@@ -29,8 +29,6 @@ detect_num_workers() {
 detect_num_workers
 
 BASE_HOST_PORT=8001
-
-# Delay in seconds between launching each worker - can be reduced if your system has enough RAM
 LAUNCH_DELAY_SECONDS=120
 
 echo "Starting ${NUM_WORKERS} llamppl inference workers..."
@@ -53,7 +51,6 @@ for i in $(seq 0 $((NUM_WORKERS-1))); do
       llamppl-inference-server
 
     if [ "$i" -lt $((NUM_WORKERS-1)) ]; then
-        # The sleep here is for shared memory constraint, feel free to lower it if your system can support it
         echo "Waiting for ${LAUNCH_DELAY_SECONDS} seconds before launching next worker..."
         sleep ${LAUNCH_DELAY_SECONDS}
     fi
